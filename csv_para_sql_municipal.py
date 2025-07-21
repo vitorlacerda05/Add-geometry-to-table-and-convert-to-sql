@@ -24,12 +24,18 @@ def detectar_tipos_colunas(df):
     """
     tipos_sql = {}
     
+    # Lista de códigos do IBGE que devem ser VARCHAR
+    codigos_ibge = ['cd_mun', 'nm_mun', 'cd_setor', 'cd_rgint', 'nm_rgint', 'cd_rgi', 'nm_rgi', 'cd_uf', 'nm_uf', 'sigla_uf']
+    
     for col in df.columns:
         if col == 'geometry':
             continue
             
+        # Verificar se é um código do IBGE
+        if col in codigos_ibge:
+            tipos_sql[col] = 'VARCHAR'
         # Verificar se é numérico
-        if df[col].dtype in ['int64', 'int32']:
+        elif df[col].dtype in ['int64', 'int32']:
             tipos_sql[col] = 'INTEGER'
         elif df[col].dtype in ['float64', 'float32']:
             tipos_sql[col] = 'NUMERIC'
@@ -115,9 +121,14 @@ def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None,
     
     # Adicionar colunas (exceto geometry)
     colunas_sql = []
-    for col in df.columns:
-        if col != 'geometry':
-            tipo_sql = tipos_colunas.get(col, 'VARCHAR(255)')
+    colunas_para_adicionar = [col for col in df.columns if col != 'geometry']
+    
+    for i, col in enumerate(colunas_para_adicionar):
+        tipo_sql = tipos_colunas.get(col, 'VARCHAR(255)')
+        # Adicionar vírgula apenas se não for a última coluna
+        if i < len(colunas_para_adicionar) - 1:
+            colunas_sql.append(f"    {col} {tipo_sql},")
+        else:
             colunas_sql.append(f"    {col} {tipo_sql}")
     
     sql_content.extend(colunas_sql)
@@ -165,8 +176,8 @@ def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None,
         if pd.isna(geometria):
             linha_valores.append("NULL")
         else:
-            # Converter WKB hex para formato PostGIS
-            linha_valores.append(f"ST_GeomFromWKB('\\x{geometria}', {srid})")
+            # Converter WKB hex para formato PostGIS e garantir MULTIPOLYGON
+            linha_valores.append(f"ST_Multi(ST_GeomFromWKB('\\x{geometria}', {srid}))")
         
         valores.append("(" + ", ".join(linha_valores) + ")")
         
