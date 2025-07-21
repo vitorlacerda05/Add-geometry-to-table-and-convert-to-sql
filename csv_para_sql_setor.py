@@ -180,10 +180,6 @@ def csv_para_sql_setor_arquivo(arquivo_csv, pasta_saida="dados_sql_setor", nome_
             linha_valores.append(f"ST_Multi(ST_GeomFromWKB('\\x{geometria}', {srid}))")
         
         valores.append("(" + ", ".join(linha_valores) + ")")
-        
-        # Adicionar quebra de linha a cada 100 registros para legibilidade
-        if (idx + 1) % 100 == 0:
-            valores.append("")
     
     sql_content.append(",\n".join(valores))
     sql_content.append(";")
