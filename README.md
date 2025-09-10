@@ -161,6 +161,24 @@ python csv_para_sql_setor.py \
 - `nm_rgi`: Nome da Região Geográfica Imediata
 - `geometry`: Geometria em formato WKB
 
+## 🗑️ Colunas Removidas
+
+Os scripts automaticamente removem as seguintes colunas existentes nos arquivos CSV de entrada:
+- `geom`: Geometria existente (se presente)
+- `geojson`: Geometria em formato GeoJSON (se presente)
+
+Isso garante que apenas as geometrias corrigidas dos arquivos de referência sejam utilizadas.
+
+## 🔢 Arredondamento de Valores
+
+Os scripts automaticamente arredondam os seguintes valores para 2 casas decimais:
+- `pcv`: Produto Interno Bruto per capita
+- `psi`: Produto Interno Bruto
+- `icv`: Índice de Complexidade Econômica
+- `pop`: População
+
+Isso garante consistência nos dados e reduz o tamanho dos arquivos.
+
 ## 🔧 Parâmetros dos Scripts
 
 ### Scripts de Adicionar Geometria:
@@ -197,6 +215,8 @@ python csv_para_sql_setor.py \
 - Usa `AddGeometryColumn` para adicionar coluna de geometria
 - Geometria em formato WKB (Well-Known Binary)
 - Compatível com PostGIS
+- Colunas `pcv`, `psi`, `icv`, `pop` são definidas como `FLOAT8` (mais leve para valores com 2 casas decimais)
+- Outras colunas numéricas usam `NUMERIC` ou `INTEGER` conforme apropriado
 
 ## ⚠️ Observações Importantes
 
@@ -205,6 +225,9 @@ python csv_para_sql_setor.py \
 3. **SRID**: Por padrão usa SRID 31983 (UTM Zone 23S), mas pode ser alterado
 4. **Tipo de geometria**: Por padrão usa MULTIPOLYGON, mas pode ser alterado conforme necessário
 5. **Arquivos grandes**: Para arquivos muito grandes, o processamento pode demorar
+6. **Geometrias existentes**: Se o arquivo CSV já contém colunas `geom` ou `geojson`, elas serão automaticamente removidas e substituídas pelas geometrias corrigidas dos arquivos de referência
+7. **Arredondamento**: Valores `pcv`, `psi`, `icv`, `pop` são automaticamente arredondados para 2 casas decimais para otimizar o armazenamento
+8. **Tipos de dados**: As colunas `pcv`, `psi`, `icv`, `pop` são definidas como `FLOAT8` no SQL para melhor performance
 
 ## 🚀 Fluxo de Trabalho Recomendado
 

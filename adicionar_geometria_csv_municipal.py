@@ -78,6 +78,13 @@ def adicionar_geometria_arquivo(arquivo_csv, pasta_geometria="dados_comparar", a
     # Carregar dados do CSV
     dados_csv = pd.read_csv(arquivo_csv)
     
+    # Remover colunas de geometria existentes se existirem
+    colunas_para_remover = ['geom', 'geojson']
+    for col in colunas_para_remover:
+        if col in dados_csv.columns:
+            print(f"🗑️ Removendo coluna existente: {col}")
+            dados_csv = dados_csv.drop(col, axis=1)
+    
     # Verificar se a coluna cd_mun existe
     if 'cd_mun' not in dados_csv.columns:
         print(f"❌ Coluna 'cd_mun' não encontrada em {arquivo_csv}")
@@ -100,6 +107,13 @@ def adicionar_geometria_arquivo(arquivo_csv, pasta_geometria="dados_comparar", a
         dados_com_geometria = dados_com_geometria.drop('cd_mun_geo', axis=1)
     if 'nm_mun_geo' in dados_com_geometria.columns:
         dados_com_geometria = dados_com_geometria.drop('nm_mun_geo', axis=1)
+    
+    # Arredondar valores numéricos para 2 casas decimais
+    colunas_para_arredondar = ['pcv', 'psi', 'icv', 'pop']
+    for col in colunas_para_arredondar:
+        if col in dados_com_geometria.columns:
+            print(f"🔢 Arredondando {col} para 2 casas decimais")
+            dados_com_geometria[col] = dados_com_geometria[col].round(2)
     
     # Verificar quantos registros foram encontrados
     registros_com_geometria = dados_com_geometria['geometry'].notna().sum()

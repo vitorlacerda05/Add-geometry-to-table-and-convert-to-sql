@@ -27,6 +27,9 @@ def detectar_tipos_colunas(df):
     # Lista de códigos do IBGE que devem ser VARCHAR
     codigos_ibge = ['cd_mun', 'nm_mun', 'cd_setor', 'cd_rgint', 'nm_rgint', 'cd_rgi', 'nm_rgi', 'cd_uf', 'nm_uf', 'sigla_uf']
     
+    # Lista de colunas que devem ser FLOAT8 (mais leve para valores com 2 casas decimais)
+    colunas_float8 = ['pcv', 'psi', 'icv', 'pop']
+    
     for col in df.columns:
         if col == 'geometry':
             continue
@@ -34,6 +37,9 @@ def detectar_tipos_colunas(df):
         # Verificar se é um código do IBGE
         if col in codigos_ibge:
             tipos_sql[col] = 'VARCHAR'
+        # Verificar se é uma das colunas que devem ser FLOAT8
+        elif col in colunas_float8:
+            tipos_sql[col] = 'FLOAT8'
         # Verificar se é numérico
         elif df[col].dtype in ['int64', 'int32']:
             tipos_sql[col] = 'INTEGER'
@@ -56,9 +62,10 @@ def detectar_tipos_colunas(df):
     
     return tipos_sql
 
-def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None, srid=31983, tipo_geometria='MULTIPOLYGON'):
+def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None, srid=31983, tipo_geometria='MULTIPOLYGON', registros_por_lote=1000):
     """
     Converte um arquivo CSV com geometria para formato SQL
+    Divide em dois arquivos para melhor performance de inserção
     
     Args:
         arquivo_csv (str): Caminho para o arquivo CSV
@@ -66,6 +73,7 @@ def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None,
         nome_tabela (str): Nome da tabela (se None, usa o nome do arquivo)
         srid (int): SRID para a geometria (padrão: 31983)
         tipo_geometria (str): Tipo de geometria (padrão: MULTIPOLYGON)
+        registros_por_lote (int): Número de registros por lote no primeiro arquivo
     """
     
     # Verificar se o arquivo existe
@@ -95,29 +103,43 @@ def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None,
         nome_arquivo = re.sub(r'_com_geometria$', '', nome_arquivo)
         nome_tabela = nome_arquivo.replace('-', '_').replace(' ', '_')
     
-    # Gerar nome do arquivo SQL
-    arquivo_sql = pasta_saida / f"{nome_tabela}.sql"
+    # Gerar nomes dos arquivos SQL
+    arquivo_sql_1 = pasta_saida / f"{nome_tabela}_parte1.sql"
+    arquivo_sql_2 = pasta_saida / f"{nome_tabela}_parte2.sql"
     
     # Detectar tipos de colunas automaticamente
     tipos_colunas = detectar_tipos_colunas(df)
     
-    # Criar conteúdo SQL
-    sql_content = []
+    # Calcular divisão dos dados
+    total_registros = len(df)
+    registros_primeira_parte = min(registros_por_lote, total_registros)
+    registros_segunda_parte = total_registros - registros_primeira_parte
+    
+    print(f"📊 Total de registros: {total_registros}")
+    print(f"📁 Primeira parte: {registros_primeira_parte} registros")
+    print(f"📁 Segunda parte: {registros_segunda_parte} registros")
+    
+    # ============================================
+    # CRIAR PRIMEIRO ARQUIVO (CREATE TABLE + primeiros INSERTs)
+    # ============================================
+    
+    sql_content_1 = []
     
     # Adicionar cabeçalho
-    sql_content.append("-- =============================================")
-    sql_content.append(f"-- Tabela: {nome_tabela}")
-    sql_content.append(f"-- Arquivo fonte: {Path(arquivo_csv).name}")
-    sql_content.append(f"-- Total de registros: {len(df)}")
-    sql_content.append(f"-- SRID: {srid}")
-    sql_content.append(f"-- Tipo geometria: {tipo_geometria}")
-    sql_content.append("-- Geometria: WKB (Well-Known Binary)")
-    sql_content.append("-- =============================================")
-    sql_content.append("")
+    sql_content_1.append("-- =============================================")
+    sql_content_1.append(f"-- Tabela: {nome_tabela}")
+    sql_content_1.append(f"-- Arquivo fonte: {Path(arquivo_csv).name}")
+    sql_content_1.append(f"-- PARTE 1: CREATE TABLE + primeiros {registros_primeira_parte} registros")
+    sql_content_1.append(f"-- Total de registros: {total_registros}")
+    sql_content_1.append(f"-- SRID: {srid}")
+    sql_content_1.append(f"-- Tipo geometria: {tipo_geometria}")
+    sql_content_1.append("-- Geometria: WKB (Well-Known Binary)")
+    sql_content_1.append("-- =============================================")
+    sql_content_1.append("")
     
     # Criar tabela
-    sql_content.append(f"CREATE TABLE public.{nome_tabela} (")
-    sql_content.append("    id SERIAL PRIMARY KEY,")
+    sql_content_1.append(f"CREATE TABLE public.{nome_tabela} (")
+    sql_content_1.append("    id SERIAL PRIMARY KEY,")
     
     # Adicionar colunas (exceto geometry)
     colunas_sql = []
@@ -131,82 +153,171 @@ def csv_para_sql_arquivo(arquivo_csv, pasta_saida="dados_sql", nome_tabela=None,
         else:
             colunas_sql.append(f"    {col} {tipo_sql}")
     
-    sql_content.extend(colunas_sql)
-    sql_content.append(");")
-    sql_content.append("")
+    sql_content_1.extend(colunas_sql)
+    sql_content_1.append(");")
+    sql_content_1.append("")
     
     # Adicionar coluna de geometria
-    sql_content.append(f"SELECT AddGeometryColumn('public','{nome_tabela}','wkb_geometry',{srid},'{tipo_geometria}',2);")
-    sql_content.append("")
+    sql_content_1.append(f"SELECT AddGeometryColumn('public','{nome_tabela}','wkb_geometry',{srid},'{tipo_geometria}',2);")
+    sql_content_1.append("")
     
-    # Inserir dados
-    sql_content.append("-- Inserir dados")
-    sql_content.append(f"INSERT INTO public.{nome_tabela} (")
-    
-    # Lista de colunas para INSERT
-    colunas_insert = [col for col in df.columns if col != 'geometry']
-    colunas_insert.append('wkb_geometry')
-    sql_content.append("    " + ", ".join(colunas_insert))
-    sql_content.append(") VALUES")
-    
-    # Processar cada linha
-    valores = []
-    for idx, row in df.iterrows():
-        # Preparar valores para cada coluna
-        linha_valores = []
+    # Inserir primeiros dados
+    if registros_primeira_parte > 0:
+        sql_content_1.append("-- Inserir primeiros dados")
+        sql_content_1.append(f"INSERT INTO public.{nome_tabela} (")
         
-        for col in df.columns:
-            if col != 'geometry':
-                valor = row[col]
-                
-                # Tratar valores nulos
-                if pd.isna(valor):
-                    linha_valores.append("NULL")
-                # Tratar strings
-                elif isinstance(valor, str):
-                    # Escapar aspas simples
-                    valor_escaped = valor.replace("'", "''")
-                    linha_valores.append(f"'{valor_escaped}'")
-                # Tratar números
-                else:
-                    linha_valores.append(str(valor))
+        # Lista de colunas para INSERT
+        colunas_insert = [col for col in df.columns if col != 'geometry']
+        colunas_insert.append('wkb_geometry')
+        sql_content_1.append("    " + ", ".join(colunas_insert))
+        sql_content_1.append(") VALUES")
         
-        # Adicionar geometria WKB
-        geometria = row['geometry']
-        if pd.isna(geometria):
-            linha_valores.append("NULL")
-        else:
-            # Converter WKB hex para formato PostGIS e garantir MULTIPOLYGON
-            linha_valores.append(f"ST_Multi(ST_GeomFromWKB('\\x{geometria}', {srid}))")
+        # Processar primeiras linhas
+        valores = []
+        for idx in range(registros_primeira_parte):
+            row = df.iloc[idx]
+            # Preparar valores para cada coluna
+            linha_valores = []
+            
+            for col in df.columns:
+                if col != 'geometry':
+                    valor = row[col]
+                    
+                    # Tratar valores nulos
+                    if pd.isna(valor):
+                        linha_valores.append("NULL")
+                    # Tratar strings
+                    elif isinstance(valor, str):
+                        # Escapar aspas simples
+                        valor_escaped = valor.replace("'", "''")
+                        linha_valores.append(f"'{valor_escaped}'")
+                    # Tratar números
+                    else:
+                        linha_valores.append(str(valor))
+            
+            # Adicionar geometria WKB
+            geometria = row['geometry']
+            if pd.isna(geometria):
+                linha_valores.append("NULL")
+            else:
+                # Converter WKB hex para formato PostGIS e garantir MULTIPOLYGON
+                linha_valores.append(f"ST_Multi(ST_GeomFromWKB('\\x{geometria}', {srid}))")
+            
+            valores.append("(" + ", ".join(linha_valores) + ")")
         
-        valores.append("(" + ", ".join(linha_valores) + ")")
-    
-    sql_content.append(",\n".join(valores))
-    sql_content.append(";")
-    sql_content.append("")
+        sql_content_1.append(",\n".join(valores))
+        sql_content_1.append(";")
+        sql_content_1.append("")
     
     # Adicionar comentários finais
-    sql_content.append("-- =============================================")
-    sql_content.append(f"-- Fim da inserção para {nome_tabela}")
-    sql_content.append(f"-- Total de registros inseridos: {len(df)}")
-    sql_content.append("-- Geometria em formato WKB")
-    sql_content.append("-- =============================================")
+    sql_content_1.append("-- =============================================")
+    sql_content_1.append(f"-- Fim da PARTE 1 para {nome_tabela}")
+    sql_content_1.append(f"-- Registros inseridos: {registros_primeira_parte}")
+    sql_content_1.append("-- Execute o arquivo parte2.sql para inserir os demais registros")
+    sql_content_1.append("-- =============================================")
     
-    # Salvar arquivo SQL
-    with open(arquivo_sql, 'w', encoding='utf-8') as f:
-        f.write("\n".join(sql_content))
+    # Salvar primeiro arquivo SQL
+    with open(arquivo_sql_1, 'w', encoding='utf-8') as f:
+        f.write("\n".join(sql_content_1))
     
-    print(f"✅ Arquivo SQL gerado: {arquivo_sql}")
-    print(f"📊 Registros processados: {len(df)}")
-    print(f"📋 Tamanho do arquivo: {arquivo_sql.stat().st_size / 1024 / 1024:.1f} MB")
+    print(f"✅ Arquivo SQL parte 1 gerado: {arquivo_sql_1}")
+    print(f"📊 Registros na parte 1: {registros_primeira_parte}")
+    print(f"📋 Tamanho do arquivo: {arquivo_sql_1.stat().st_size / 1024 / 1024:.1f} MB")
+    
+    # ============================================
+    # CRIAR SEGUNDO ARQUIVO (restante dos INSERTs)
+    # ============================================
+    
+    if registros_segunda_parte > 0:
+        sql_content_2 = []
+        
+        # Adicionar cabeçalho
+        sql_content_2.append("-- =============================================")
+        sql_content_2.append(f"-- Tabela: {nome_tabela}")
+        sql_content_2.append(f"-- Arquivo fonte: {Path(arquivo_csv).name}")
+        sql_content_2.append(f"-- PARTE 2: {registros_segunda_parte} registros restantes")
+        sql_content_2.append(f"-- Total de registros: {total_registros}")
+        sql_content_2.append(f"-- SRID: {srid}")
+        sql_content_2.append(f"-- Tipo geometria: {tipo_geometria}")
+        sql_content_2.append("-- Geometria: WKB (Well-Known Binary)")
+        sql_content_2.append("-- IMPORTANTE: Execute a parte 1 primeiro!")
+        sql_content_2.append("-- =============================================")
+        sql_content_2.append("")
+        
+        # Inserir dados restantes
+        sql_content_2.append("-- Inserir dados restantes")
+        sql_content_2.append(f"INSERT INTO public.{nome_tabela} (")
+        
+        # Lista de colunas para INSERT
+        colunas_insert = [col for col in df.columns if col != 'geometry']
+        colunas_insert.append('wkb_geometry')
+        sql_content_2.append("    " + ", ".join(colunas_insert))
+        sql_content_2.append(") VALUES")
+        
+        # Processar linhas restantes
+        valores = []
+        for idx in range(registros_primeira_parte, total_registros):
+            row = df.iloc[idx]
+            # Preparar valores para cada coluna
+            linha_valores = []
+            
+            for col in df.columns:
+                if col != 'geometry':
+                    valor = row[col]
+                    
+                    # Tratar valores nulos
+                    if pd.isna(valor):
+                        linha_valores.append("NULL")
+                    # Tratar strings
+                    elif isinstance(valor, str):
+                        # Escapar aspas simples
+                        valor_escaped = valor.replace("'", "''")
+                        linha_valores.append(f"'{valor_escaped}'")
+                    # Tratar números
+                    else:
+                        linha_valores.append(str(valor))
+            
+            # Adicionar geometria WKB
+            geometria = row['geometry']
+            if pd.isna(geometria):
+                linha_valores.append("NULL")
+            else:
+                # Converter WKB hex para formato PostGIS e garantir MULTIPOLYGON
+                linha_valores.append(f"ST_Multi(ST_GeomFromWKB('\\x{geometria}', {srid}))")
+            
+            valores.append("(" + ", ".join(linha_valores) + ")")
+        
+        sql_content_2.append(",\n".join(valores))
+        sql_content_2.append(";")
+        sql_content_2.append("")
+        
+        # Adicionar comentários finais
+        sql_content_2.append("-- =============================================")
+        sql_content_2.append(f"-- Fim da PARTE 2 para {nome_tabela}")
+        sql_content_2.append(f"-- Registros inseridos: {registros_segunda_parte}")
+        sql_content_2.append(f"-- Total final: {total_registros} registros")
+        sql_content_2.append("-- Geometria em formato WKB")
+        sql_content_2.append("-- =============================================")
+        
+        # Salvar segundo arquivo SQL
+        with open(arquivo_sql_2, 'w', encoding='utf-8') as f:
+            f.write("\n".join(sql_content_2))
+        
+        print(f"✅ Arquivo SQL parte 2 gerado: {arquivo_sql_2}")
+        print(f"📊 Registros na parte 2: {registros_segunda_parte}")
+        print(f"📋 Tamanho do arquivo: {arquivo_sql_2.stat().st_size / 1024 / 1024:.1f} MB")
+    else:
+        print(f"ℹ️  Não há segunda parte necessária (todos os registros na parte 1)")
+    
     print(f"🔧 Formato geometria: WKB")
     print(f"🗂️  Colunas detectadas: {len(df.columns)}")
     
     return True
 
-def csv_para_sql_pasta(pasta_csv="dados_com_geometria_csv", padrao="*_com_geometria.csv", pasta_saida="dados_sql", srid=31983, tipo_geometria='MULTIPOLYGON'):
+def csv_para_sql_pasta(pasta_csv="dados_com_geometria_csv", padrao="*_com_geometria.csv", pasta_saida="dados_sql", srid=31983, tipo_geometria='MULTIPOLYGON', registros_por_lote=1000):
     """
     Converte todos os arquivos CSV com geometria em uma pasta para formato SQL
+    Divide cada arquivo em duas partes para melhor performance
     
     Args:
         pasta_csv (str): Pasta com os arquivos CSV
@@ -214,6 +325,7 @@ def csv_para_sql_pasta(pasta_csv="dados_com_geometria_csv", padrao="*_com_geomet
         pasta_saida (str): Pasta onde salvar os arquivos SQL
         srid (int): SRID para a geometria
         tipo_geometria (str): Tipo de geometria
+        registros_por_lote (int): Número de registros por lote no primeiro arquivo
     """
     
     pasta_csv = Path(pasta_csv)
@@ -237,7 +349,7 @@ def csv_para_sql_pasta(pasta_csv="dados_com_geometria_csv", padrao="*_com_geomet
     sucessos = 0
     for arquivo_csv in arquivos_csv:
         print(f"\n{'='*60}")
-        if csv_para_sql_arquivo(str(arquivo_csv), pasta_saida, srid=srid, tipo_geometria=tipo_geometria):
+        if csv_para_sql_arquivo(str(arquivo_csv), pasta_saida, srid=srid, tipo_geometria=tipo_geometria, registros_por_lote=registros_por_lote):
             sucessos += 1
     
     print(f"\n🎉 Conversão concluída!")
@@ -262,15 +374,17 @@ def main():
     parser.add_argument('--srid', type=int, default=31983, help='SRID para a geometria (padrão: 31983)')
     parser.add_argument('--tipo-geometria', type=str, default='MULTIPOLYGON',
                        help='Tipo de geometria (padrão: MULTIPOLYGON)')
+    parser.add_argument('--registros-por-lote', type=int, default=1000,
+                       help='Número de registros por lote no primeiro arquivo (padrão: 1000)')
     
     args = parser.parse_args()
     
     if args.arquivo:
         # Processar arquivo específico
-        csv_para_sql_arquivo(args.arquivo, args.pasta_saida, args.nome_tabela, args.srid, args.tipo_geometria)
+        csv_para_sql_arquivo(args.arquivo, args.pasta_saida, args.nome_tabela, args.srid, args.tipo_geometria, args.registros_por_lote)
     else:
         # Processar todos os arquivos que seguem o padrão
-        csv_para_sql_pasta(args.pasta_csv, args.padrao, args.pasta_saida, args.srid, args.tipo_geometria)
+        csv_para_sql_pasta(args.pasta_csv, args.padrao, args.pasta_saida, args.srid, args.tipo_geometria, args.registros_por_lote)
 
 if __name__ == "__main__":
     # Se não houver argumentos, usar o comportamento padrão
